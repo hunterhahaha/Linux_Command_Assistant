@@ -1,0 +1,2 @@
+# Linux_Command_Assistant
+基于大语言模型制作的Linux命令学习助手demo。
