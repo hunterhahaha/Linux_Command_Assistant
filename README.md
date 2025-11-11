@@ -9,7 +9,7 @@
 - 阿里云DashScope API密钥
 
 ## 安装步骤
-1. 下载除README以外的所有文件
+1. 下载所有文件
 2. 安装依赖：`pip install -r requirements.txt`
 3. 在`.env`文件中配置您的阿里云API密钥
 **注意：因为demo使用的是阿里云提供的模型服务api库，使用其他服务商的api可能会有兼容问题；**
