@@ -1,10 +1,12 @@
 # app.py
 import os
+import re
 from dotenv import load_dotenv
 import chromadb
 import dashscope
 from dashscope import Generation, TextEmbedding
 from dashscope import Generation
+from torch._functorch.pyfunctorch import retrieve_all_functorch_interpreters
 
 # ============ 加载环境变量 ============
 load_dotenv()
@@ -20,7 +22,7 @@ COLLECTION_NAME = "linux_commands"
 
 
 # ====================================================
-
+# 解析提问
 def get_embeddings(texts):
     """
     使用阿里云 text-embedding-v3 模型批量获取文本嵌入向量。
@@ -41,6 +43,7 @@ def get_embeddings(texts):
     else:
         raise Exception(f"嵌入API调用失败: {response.code}, {response.message}")
 
+# 检索数据库
 def retrieve_context(query, n_results=3):
     """
     根据用户查询，从向量数据库中检索最相关的上下文文本块。
@@ -64,7 +67,7 @@ def retrieve_context(query, n_results=3):
         print(f"检索时出错: {e}")
         return []
 
-
+# 获取模型回答
 def call_qwen_api(prompt, model='qwen3-max'):
     """
     调用通义千问API生成回答。
@@ -89,7 +92,84 @@ def call_qwen_api(prompt, model='qwen3-max'):
     except Exception as e:
         return f"❌ 发生错误: {str(e)}"
 
+# 获取判断是否需要检索的提问词
+def get_retrieve_prompt(user_question):
+    return f"""你是一个严格的Linux命令知识库访问控制器。
+请根据以下用户问题，严格判断是否需要从Linux命令知识库中检索信息。
+只允许在以下情况回答"需要"：
+1. 用户明确询问某个Linux命令的具体用法、参数、作用
+2. 用户问题中包含"命令"、"指令"、"用法"、"语法"等关键词
+3. 用户直接提及具体的Linux命令名称（如su, ls, grep等）
 
+在以下情况必须回答"不需要"：
+1. 用户在设置昵称、问候、告别等社交互动
+2. 用户问题与Linux命令无关
+3. 用户只是泛泛而谈"Linux"但未涉及具体命令
+    
+用户问题{user_question}
+    
+请严格按照要求回答，只能回答"需要"或"不需要"，不能添加其他内容。
+"""
+
+# 判断是否需要从数据库中检索信息
+def is_need_retrieve(user_question):
+    """
+    通过多重判断来决定是否需要去检索数据库
+    判断一：检查是否包含Linux命令关键词
+    判断二：检查是否包含"命令"、"指令"、"用法"、"语法"、"参数"等关键词
+    判断三：检查是否存在社交或设置请求
+    """
+
+    # 设置硬性规则过滤
+    user_question = user_question.strip().lower()
+
+    result = None # 默认为空
+
+    # 判断一：检查是否包含Linux命令关键词
+    linux_commands = [
+    "man", "help", "info", "shutdown", "reboot", "halt", "poweroff", "pwd", 
+    "cd", "tree", "mkdir", "touch", "ls", "cp", "mv", "rm", "rmdir", "ln", 
+    "readlink", "find", "xargs", "rename", "basename", "dirname", "chattr",
+    "lsattr", "file", "md5sum", "chown", "chmod", "chgrp", "umask", "cat",
+    "tac", "more", "less", "head", "tail", "tailf", "cut", "split", "paste",
+    "sort", "join", "uniq", "wc", "iconv", "dos2unix", "diff", "vimdiff", 
+    "rev", "tr", "od", "tee", "vi", "vim", "grep", "sed", "awk", "uname", 
+    "hostname", "demsg", "stat", "du", "date", "echo", "watch", "which", 
+    "whereis", "locate", "updatedb", "tar", "gzip", "zip", "unzip", "scp", 
+    "rsync", "useradd", "usermod", "userdel", "groupadd", "groupdel", "passwd", 
+    "chage", "chpasswd", "su", "visudo", "sudo", "id", "w", "who", "users", 
+    "whoami", "last", "lastb", "latslog", "fdisk", "partprobe", "tune2fs", 
+    "parted", "mkfs", "dumpe2fs", "resize2fs", "fsck", "dd", "mount", 
+    "umount", "df", "mkswap", "swapon", "swapoff", "sync", "ps", 
+    "pstree", "pgrep", "kill", "killall", "pkill", "top", "nice", 
+    "renice", "nohup", "strace", "ltrace", "runlevel", "init", "service",
+    "ifconfig", "ifup", "ifdown", "route", "arp", "ip", "netstat", "ss", 
+    "ping", "traceroute", "arping", "telnet", "curl", "nc", "ssh", "wget", 
+    "mail", "mailq", "nslookup", "dig", "host", "nmap", "tcpdump", "lsof", 
+    "uptime", "free", "iftop", "vmstat", "mpstat", "iostat", "iotop", "sar", 
+    "chkconfig", "ntsysv", "setup", "ethtool", "mii-tool", "dmidecode", 
+    "lspci", "ipcs", "ipcrm", "rpm", "yum", ":", "source", "test", "alias", 
+    "unalias", "bg", "fg", "jobs", "break", "continue", "eval", "exit", 
+    "logout", "export", "history", "read", "type", "ulimit", "unset"]
+
+    words = re.findall(r'\b[a-zA-Z]+\b', user_question) # 用正则表达式提取所有单词
+    if any(cmd in words for cmd in linux_commands):
+        return true
+
+    # 判断二：检查是否包含"命令"、"指令"、"用法"、"语法"等关键词
+    keywords = ["命令", "指令", "用法", "语法", "参数"]
+    if any(keyword in user_question for keyword in keywords):
+        return True
+    
+    # 判断三：检查是否存在社交或设置请求
+    social_keywords = ["你好", "称呼", "名字", "hi", "hello", "早上好", "晚上好", "再见", "bye"]
+    if any(keyword in user_question for keyword in social_keywords):
+        return False
+    
+    # 无法判断则返回None，交给大模型判断
+    return None
+
+# 获取答案
 def get_answer(user_question, history_tuples=None):
     """
     主函数：结合RAG和LLM，给出最终答案。
@@ -112,8 +192,24 @@ def get_answer(user_question, history_tuples=None):
         history_context = "\n\n".join(history_lines)
         history_context = f"【过往对话】\n{history_context}\n\n"
 
-    # ============ 2. 尝试从知识库检索 ============
-    contexts = retrieve_context(user_question, n_results=2)
+    # ============ 2. 判断是否需要检索数据库 ============
+
+    # 调用大模型进行判断
+    judge_response = is_need_retrieve(user_question)
+
+    # 在需要时检索数据库
+    if judge_response == True:
+        contexts = retrieve_context(user_question, n_results=2)
+    elif judge_response == False:
+        contexts = []
+    else:
+        #获取提示词
+        judge_prompt = get_retrieve_prompt(user_question)
+        judge_response2 = call_qwen_api(judge_prompt)
+        if "需要" in judge_response2:
+            contexts = retrieve_context(user_question, n_results=2)
+        else:
+            contexts = []
 
     # ============ 3. 构造最终Prompt ============
     if contexts:
@@ -133,15 +229,19 @@ def get_answer(user_question, history_tuples=None):
 4. 如果知识库中包含多个相关信息，请整合成一个完整的回答
 5. 在回答末尾标注信息来源（如：根据Linux命令手册/根据知识库文档）
 6. 如果用户询问的命令有安全风险或需要注意事项，请特别提醒
-7. 保持教育性和实用性，帮助用户真正理解命令的使用方法
-
+7. 保持教育性和实用性，帮助用户真正理解命令的使用方法和注意事项
+8. 遵守用户在历史对话中提出的要求
 【当前问题】
 {user_question}
 
 现在请基于知识库内容给出专业解答："""
     else:
+        if judge_response == None:
+            retrieve_prompt = "结果检索，知识库中没有找到与用户问题相关的具体信息。"
+        else:
+            retrieve_prompt = "用户的问题似乎与Linux命令无关，将基于通用知识进行回答。"
         # 没有知识库信息：使用通用问答模式
-        final_prompt = f"""你是一个专业的Linux命令学习助手，专门为用户学习Linux命令提供帮助。经过检索，知识库中没有找到与用户问题相关的具体信息。
+        final_prompt = f"""你是一个专业的Linux命令学习助手，专门为用户学习Linux命令提供帮助。{retrieve_prompt}
 {history_context}  # ← 注入历史上下文！
 
 <system_info>
@@ -164,7 +264,7 @@ def get_answer(user_question, history_tuples=None):
 【当前问题】
 {user_question}
 
-现在请基于你的通用Linux知识给出专业解答，并在开头说明"知识库中未找到相关信息，以下基于通用Linux知识解答："："""
+现在请基于你的通用Linux知识给出专业解答，并在开头说明"{retrieve_prompt}以下基于通用Linux知识解答："："""
 
     # ============ 4. 调用大模型 ============
     answer = call_qwen_api(final_prompt)
@@ -185,13 +285,19 @@ try:
         if not user_input.strip():
             return "", history_messages, history_messages
         
-        # 将用户输入添加到历史 (使用 messages 格式)
-        history_messages.append({"role": "user", "content": user_input})
+        # 将 history_messages 从字典格式转换为元组格式
+        history_tuples = []
+        for i in range(0, len(history_messages), 2):
+            if i + 1 < len(history_messages):
+                user_msg = history_messages[i]["content"]
+                ai_msg = history_messages[i+1]["content"]
+                history_tuples.append((user_msg, ai_msg))
         
         # 获取AI回答 (确保 get_answer 支持 messages 格式的历史)
-        ai_response = get_answer(user_input, history_messages)
+        ai_response = get_answer(user_input, history_tuples)
         
-        # 将AI回答添加到历史
+        # 将用户输入和AI回答添加到历史
+        history_messages.append({"role": "user", "content": user_input})
         history_messages.append({"role": "assistant", "content": ai_response})
         
         # 返回值：清空输入框，更新聊天历史，更新状态
