@@ -6,7 +6,6 @@ import chromadb
 import dashscope
 from dashscope import Generation, TextEmbedding
 from dashscope import Generation
-from torch._functorch.pyfunctorch import retrieve_all_functorch_interpreters
 
 # ============ 加载环境变量 ============
 load_dotenv()
@@ -340,4 +339,5 @@ try:
         demo.launch(server_name="127.0.0.1", server_port=7860, share=False)
 
 except ImportError:
+
     print("\n Gradio未安装。如需Web界面，请运行: pip install gradio")
